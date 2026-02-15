@@ -6,7 +6,6 @@ import pandas as pd
 st.set_page_config(page_title="Arthur Murray Hall of Fame", layout="wide")
 st.title("🏆 Top 100 Arthur Murray Videos of All Time")
 
-# 1. Connection setup
 conn = st.connection("gsheets", type=GSheetsConnection)
 my_key = st.sidebar.text_input("YouTube API Key:", type="password")
 sheet_url = st.sidebar.text_input("Paste Google Sheet URL:")
@@ -14,40 +13,47 @@ sheet_url = st.sidebar.text_input("Paste Google Sheet URL:")
 if my_key and sheet_url:
     youtube = build('youtube', 'v3', developerKey=my_key)
     
-    # 2. SEARCH: Get 50 results (Max per search)
-    search_response = youtube.search().list(
-        q="Arthur Murray dance",
-        part="snippet",
-        type="video",
-        maxResults=50,
-        order="viewCount" # Sort by views!
-    ).execute()
-
-    video_ids = [item['id']['videoId'] for item in search_response.get('items', [])]
-    v_details = youtube.videos().list(id=','.join(video_ids), part="snippet,statistics").execute()
-
     data = []
-    for v in v_details.get('items', []):
-        channel_name = v['snippet']['channelTitle']
-        if channel_name.lower().startswith("arthur murray"):
-            data.append({
-                "Thumbnail": v['snippet']['thumbnails']['default']['url'],
-                "Title": v['snippet']['title'],
-                "Channel": channel_name,
-                "Views": int(v['statistics'].get('viewCount', 0)),
-                "URL": f"https://www.youtube.com/watch?v={v['id']}"
-            })
+    next_page_token = None
+    target_count = 100 # We want 100 results
+
+    # 1. LOOP: Keep searching until we hit 100 or run out of pages
+    while len(data) < target_count:
+        search_response = youtube.search().list(
+            q="Arthur Murray dance",
+            part="snippet",
+            type="video",
+            maxResults=50,
+            order="viewCount",
+            pageToken=next_page_token # Tell YouTube which page we are on
+        ).execute()
+
+        video_ids = [item['id']['videoId'] for item in search_response.get('items', [])]
+        v_details = youtube.videos().list(id=','.join(video_ids), part="snippet,statistics").execute()
+
+        for v in v_details.get('items', []):
+            channel_name = v['snippet']['channelTitle']
+            thumb_url = v['snippet']['thumbnails']['default']['url']
+            
+            if channel_name.lower().startswith("arthur murray") and len(data) < target_count:
+                data.append({
+                    # This formula makes the thumbnail a real image in Google Sheets!
+                    "Thumbnail": f'=IMAGE("{thumb_url}")', 
+                    "Title": v['snippet']['title'],
+                    "Channel": channel_name,
+                    "Views": int(v['statistics'].get('viewCount', 0)),
+                    "URL": f"https://www.youtube.com/watch?v={v['id']}"
+                })
+
+        next_page_token = search_response.get('nextPageToken')
+        if not next_page_token: # Stop if there are no more pages
+            break
 
     df = pd.DataFrame(data)
     if not df.empty:
-        if st.button("🚀 Push Top Videos to Google Sheet"):
+        st.write(f"Found {len(df)} official studio videos!")
+        if st.button("🚀 Push Top 100 to Google Sheet"):
             conn.update(spreadsheet=sheet_url, data=df)
-            st.success("Your Google Sheet is now a Hall of Fame!")
+            st.success("Successfully updated the Hall of Fame!")
         
-        # Display nicely in the app
-        st.data_editor(df, column_config={
-            "Thumbnail": st.column_config.ImageColumn("Preview"),
-            "URL": st.column_config.LinkColumn("Watch Video")
-        })
-else:
-    st.info("👈 Paste your YouTube Key and Google Sheet URL in the sidebar.")
+        st.dataframe(df)
